@@ -1,0 +1,85 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  test:
+    strategy:
+      # Default is true, cancels jobs for other platforms in the matrix if one fails
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+        go: [ '1.26', '1.27' ]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Install Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: ${{ matrix.go }}
+
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Print Go version and environment
+      id: vars
+      run: |
+        printf "Using go at: $(which go)\n"
+        printf "Go version: $(go version)\n"
+        printf "\n\nGo environment:\n\n"
+        go env
+        printf "\n\nSystem environment:\n\n"
+        env
+        # Calculate the short SHA1 hash of the git commit
+        echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+        echo "go_cache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache the build cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.vars.outputs.go_cache }}
+        key: ${{ runner.os }}-${{ matrix.go }}-go-ci-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.go }}-go-ci
+
+    - name: Install xcaddy
+      run: |
+        go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+
+    - name: Build
+      env:
+        CGO_ENABLED: 0
+      run: |
+        xcaddy build --with github.com/Meow/caddy-s3-proxy=.
+
+    - name: Cross-compile check
+      run: |
+        GOOS=darwin go vet .
+        GOOS=windows go vet .
+        GOOS=freebsd go vet .
+
+    - name: Run tests
+      run: |
+        go test -v -coverprofile="cover-profile.out" -race ./...
+
+  golangci:
+    name: Lint
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          args: --timeout 5m
